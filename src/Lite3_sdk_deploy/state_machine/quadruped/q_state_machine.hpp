@@ -15,7 +15,7 @@
 #include "quadruped/idle_state.hpp"
 #include "quadruped/standup_state.hpp"
 #include "quadruped/joint_damping_state.hpp"
-#include "quadruped/rl_control_state.hpp"
+#include "quadruped/control_state.hpp"
 #include "quadruped/liedown_state.hpp"
 #include "keyboard_interface.hpp"
 #include "retroid_gamepad_interface.hpp"
@@ -28,7 +28,7 @@ private:
 
     std::shared_ptr<StateBase> idle_controller_;
     std::shared_ptr<StateBase> standup_controller_;
-    std::shared_ptr<StateBase> rl_controller_;
+    std::shared_ptr<ControlState> control_controller_;
     std::shared_ptr<StateBase> joint_damping_controller_;
     std::shared_ptr<StateBase> liedown_controller_;
     std::shared_ptr<JointsDataShadowSubscriber> joints_data_shadow_subscriber_;
@@ -84,7 +84,11 @@ public:
 
         idle_controller_ = std::make_shared<IdleState>(robot_name_, "idle_state", data_ptr);
         standup_controller_ = std::make_shared<StandUpState>(robot_name_, "standup_state", data_ptr);
-        rl_controller_ = std::make_shared<RLControlState>(robot_name_, "rl_control", data_ptr);
+        control_controller_ = std::make_shared<ControlState>(robot_name_, data_ptr);
+        std::vector<std::string> controller_names;
+        for (const auto& entry : control_controller_->Controllers())
+            controller_names.emplace_back(entry.name);
+        uc_ptr_->SetAvailableControllers(controller_names);
         joint_damping_controller_ = std::make_shared<JointDampingState>(robot_name_, "joint_damping", data_ptr);
         liedown_controller_ = std::make_shared<LieDownState>(robot_name_, "liedown_state", data_ptr);
 
@@ -103,6 +107,33 @@ public:
     }
 
 
+    void ProcessControllerSelection() override {
+        // Keep the request pending until the standing trajectory allows entry.
+        if (current_state_name_ == kStandUp && next_state_name_ == kStandUp)
+            return;
+
+        const bool selection_requested = uc_ptr_->ConsumeControllerSelection();
+        if (next_state_name_ != kControl)
+            return;
+
+        if (selection_requested && !control_controller_->SelectNext())
+            next_state_name_ = current_state_name_;
+
+        if (current_state_name_ != kControl && !control_controller_->IsReady()) {
+            next_state_name_ = current_state_name_;
+            uc_ptr_->SetTargetMode(uint8_t(StandingUp));
+            std::cout << "[CONTROLLER] Not ready; entry request discarded." << std::endl;
+        }
+    }
+
+    const std::vector<ControlState::ControllerEntry>& Controllers() const {
+        return control_controller_->Controllers();
+    }
+
+    std::string ActiveControllerName() const override {
+        return control_controller_->ActiveControllerName();
+    }
+
     std::shared_ptr<StateBase> GetStateControllerPtr(StateName state_name){
         switch(state_name){
             case StateName::kInvalid:{
@@ -114,8 +145,8 @@ public:
             case StateName::kStandUp:{
                 return standup_controller_;
             }
-            case StateName::kRLControl:{
-                return rl_controller_;
+            case StateName::kControl:{
+                return control_controller_;
             }
             case StateName::kJointDamping:{
                 return joint_damping_controller_;

@@ -4,6 +4,7 @@ std_msgs/Header header
 string robot
 string command_source
 string current_state
+string active_controller
 uint8 current_state_id
 string requested_state
 uint8 requested_state_id

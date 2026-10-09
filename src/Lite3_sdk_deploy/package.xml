@@ -2,14 +2,17 @@
 <package format="3">
   <name>lite3_sdk_deploy</name>
   <version>1.3.0</version>
-  <description>RL deploy</description>
+  <description>Lite3 controller deploy</description>
   <maintainer email="haokaidai.zju@gmail.com">Haokai Dai</maintainer>
   <license>BSD 3-Clause</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 
+  <build_depend>python3-dev</build_depend>
+  <build_depend>pybind11-dev</build_depend>
   <depend>ament_index_cpp</depend>
   <depend>rclcpp</depend>
+  <exec_depend>rclpy</exec_depend>
   <depend>drdds</depend>
   <depend>std_msgs</depend>
   <depend>geometry_msgs</depend>

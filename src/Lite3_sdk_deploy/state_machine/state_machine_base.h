@@ -144,6 +144,8 @@ public:
                     next_state_name_ = current_controller_->GetNextStateName();
                 }
 
+                ProcessControllerSelection();
+
                 if (next_state_name_ != current_state_name_) {
                     current_controller_->OnExit();
                     std::cout << current_controller_->state_name_ << " ------------> ";
@@ -152,13 +154,18 @@ public:
                     current_controller_->OnEnter();
                     current_state_name_ = next_state_name_;
                 }
-                ros_control_->Publish(current_state_name_);
+                const auto active_controller = ActiveControllerName();
+                uc_ptr_->SetActiveControllerName(active_controller);
+                ros_control_->Publish(current_state_name_, active_controller);
                 ++run_cnt_;
             }
         }
     }
 
     virtual void Stop() = 0;
+
+    virtual void ProcessControllerSelection() {}
+    virtual std::string ActiveControllerName() const { return ""; }
 
     virtual std::shared_ptr<StateBase> GetStateControllerPtr(StateName state_name) = 0;
     

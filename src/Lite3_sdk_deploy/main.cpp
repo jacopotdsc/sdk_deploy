@@ -17,11 +17,13 @@ int main(int argc, char** argv){
     // Choose the input interface by changing RemoteCommandType below:
     // kKeyBoard = 0: keyboard (default); kRetroidGamepad = 1: gamepad;
     // kRos2 = 2: ROS 2 topics. Rebuild and restart rl_deploy after changing it.
-    std::shared_ptr<StateMachineBase> fsm = std::make_shared<q::QStateMachine>(RobotName::Lite3, 
+    auto fsm = std::make_shared<q::QStateMachine>(RobotName::Lite3,
         RemoteCommandType::kKeyBoard);
     fsm->Start();
+    for (const auto& entry : fsm->Controllers()){ entry.controller->Compile(); }
     fsm->Run();
     fsm->Stop();
+    for (auto it = fsm->Controllers().rbegin(); it != fsm->Controllers().rend(); ++it){ it->controller->Stop(); }
 
     rclcpp::shutdown();
     return 0;

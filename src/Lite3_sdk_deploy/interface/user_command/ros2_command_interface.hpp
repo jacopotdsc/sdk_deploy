@@ -22,7 +22,7 @@ inline std::string StateLabel(uint8_t state) {
     case types::StandingUp: return "stand";
     case types::JointDamping: return "damping";
     case types::LieDown: return "lie_down";
-    case types::RLControlMode: return "rl_control";
+    case types::ControlMode: return "control";
     default: return "unknown";
     }
 }
@@ -68,7 +68,7 @@ public:
                 int target = -1;
                 if (msg->data == "stand") target = types::StandingUp;
                 if (msg->data == "lie_down") target = types::LieDown;
-                if (msg->data == "rl_control") target = types::RLControlMode;
+                if (msg->data == "control") target = types::ControlMode;
                 if (msg->data == "damping") target = types::JointDamping;
                 if (target < 0) { ++rejected_; return; }
                 // A damping request cannot be overwritten before the next control tick.
@@ -129,19 +129,24 @@ public:
                 (pending_state_ == types::StandingUp &&
                     (current_state == types::WaitingForStand || current_state == types::LieDown)) ||
                 (pending_state_ == types::LieDown &&
-                    (current_state == types::StandingUp || current_state == types::RLControlMode)) ||
-                (pending_state_ == types::RLControlMode && current_state == types::StandingUp);
+                    (current_state == types::StandingUp || current_state == types::ControlMode)) ||
+                (pending_state_ == types::ControlMode && (current_state == types::StandingUp || current_state == types::ControlMode));
             if (fresh && allowed && usr_cmd_->safe_control_mode == 0) {
-                usr_cmd_->target_mode = pending_state_;
-                if (pending_state_ != types::RLControlMode) have_velocity_ = false;
+                if (pending_state_ == types::ControlMode && current_state == types::ControlMode) {
+                    std::string current_controller = RequestNextController();
+                    std::cout << "[CONTROLLER] Next requested; current controller: " << current_controller << std::endl;
+                } else {
+                    usr_cmd_->target_mode = pending_state_;
+                }
+                if (pending_state_ != types::ControlMode) have_velocity_ = false;
             } else { ++rejected_; }
             pending_state_ = -1;
         }
         timed_out_ = !have_velocity_ ||
             std::chrono::duration<double>(now - velocity_time_).count() > timeout_;
         ZeroVelocity();
-        if (!timed_out_ && current_state == types::RLControlMode &&
-            usr_cmd_->target_mode == types::RLControlMode && usr_cmd_->safe_control_mode == 0) {
+        if (!timed_out_ && current_state == types::ControlMode &&
+            usr_cmd_->target_mode == types::ControlMode && usr_cmd_->safe_control_mode == 0) {
             usr_cmd_->forward_vel_scale = velocity_.linear.x;
             usr_cmd_->side_vel_scale = velocity_.linear.y;
             usr_cmd_->turnning_vel_scale = velocity_.angular.z;
@@ -199,7 +204,7 @@ public:
         command_pub_->publish(msg);
     }
 
-    void Publish(uint8_t state) {
+    void Publish(uint8_t state, const std::string& active_controller = "") {
         const auto now = Clock::now();
         if (now < next_status_) return;
         Advance(next_status_, now, std::chrono::milliseconds(100));
@@ -210,6 +215,7 @@ public:
         msg.command_source = source_;
         msg.current_state_id = state;
         msg.current_state = StateLabel(state);
+        msg.active_controller = active_controller;
         const auto cmd = *command_->GetUserCommand();
         msg.requested_state_id = cmd.target_mode;
         msg.requested_state = StateLabel(cmd.target_mode);

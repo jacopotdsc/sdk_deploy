@@ -22,6 +22,7 @@ import mujoco.viewer
 import rclpy
 from rclpy.node import Node
 from builtin_interfaces.msg import Time
+from std_msgs.msg import Float64MultiArray
 from drdds.msg import ImuData, JointsData, JointsDataCmd, MetaType, ImuDataValue, JointsDataValue, JointData, JointDataCmd
 
 
@@ -87,6 +88,7 @@ class MuJoCoSimulationNode(Node):
         self.get_logger().info(f"[INFO] MuJoCo model loaded, dof = {self.dof_num}")
 
         # ROS Publishers
+        self.mpc_state_pub = self.create_publisher(Float64MultiArray, 'lite3/mpc/sim_state', 1)
         self.imu_pub = self.create_publisher(ImuData, '/IMU_DATA', 200)
         self.joints_pub = self.create_publisher(JointsData, '/JOINTS_DATA', 200)
 
@@ -205,6 +207,11 @@ class MuJoCoSimulationNode(Node):
     # --------------------------------------------------------
 
     def _publish_robot_state(self, step: int):
+        # Complete floating-base state for simulation-only SRBD control.
+        mpc_state = Float64MultiArray()
+        mpc_state.data = np.concatenate([[self.timestamp], self.data.qpos[:19], self.data.qvel[:18]]).tolist()
+        self.mpc_state_pub.publish(mpc_state)
+
         # ----- IMU -----
         # q_world = self.data.sensordata[:4]  # quaternion
         q_world = self.data.qpos[3:7]

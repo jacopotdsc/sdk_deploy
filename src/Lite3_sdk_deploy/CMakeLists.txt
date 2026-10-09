@@ -39,6 +39,28 @@ find_package(rclcpp REQUIRED)
 find_package(drdds REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
+find_package(Python3 REQUIRED COMPONENTS Interpreter Development)
+find_package(pybind11 REQUIRED)
+# Use the same native MuJoCo library/header version as the Python environment.
+execute_process(COMMAND ${Python3_EXECUTABLE} -c
+  "import pathlib,mujoco; print(pathlib.Path(mujoco.__file__).parent)"
+  OUTPUT_VARIABLE MUJOCO_ROOT OUTPUT_STRIP_TRAILING_WHITESPACE
+  RESULT_VARIABLE MUJOCO_IMPORT_RESULT)
+if(NOT MUJOCO_IMPORT_RESULT EQUAL 0)
+  message(FATAL_ERROR "Install mpc/requirements.txt for the selected Python interpreter")
+endif()
+file(GLOB MUJOCO_LIBRARIES "${MUJOCO_ROOT}/libmujoco.so.*")
+list(LENGTH MUJOCO_LIBRARIES MUJOCO_LIBRARY_COUNT)
+if(NOT MUJOCO_LIBRARY_COUNT EQUAL 1)
+  message(FATAL_ERROR "Expected one native MuJoCo library in ${MUJOCO_ROOT}")
+endif()
+list(GET MUJOCO_LIBRARIES 0 MUJOCO_LIBRARY)
+add_executable(mpc_srbd mpc/native/mpc_srbd_node.cpp)
+target_include_directories(mpc_srbd PRIVATE ${MUJOCO_ROOT}/include ${CMAKE_CURRENT_SOURCE_DIR}/third_party/eigen)
+target_link_libraries(mpc_srbd pybind11::embed ${MUJOCO_LIBRARY})
+ament_target_dependencies(mpc_srbd rclcpp ament_index_cpp std_msgs geometry_msgs)
+set_target_properties(mpc_srbd PROPERTIES INSTALL_RPATH "${MUJOCO_ROOT}")
+install(TARGETS mpc_srbd DESTINATION lib/${PROJECT_NAME})
 
 set(THIRD_PARTY ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
 
@@ -114,5 +136,24 @@ install(TARGETS rl_deploy
 install(DIRECTORY config/
   DESTINATION share/${PROJECT_NAME}/config
 )
+
+if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/mpc/upstream/mpx/jax_ocp_solvers/jax_ocp_solvers/optimizers.py")
+  message(FATAL_ERROR "MPX dependency missing from src/Lite3_sdk_deploy/mpc/upstream")
+endif()
+
+install(DIRECTORY mpc/ DESTINATION lib/${PROJECT_NAME}/mpc USE_SOURCE_PERMISSIONS
+  PATTERN "__pycache__" EXCLUDE PATTERN "tests" EXCLUDE
+  PATTERN ".git" EXCLUDE)
+install(DIRECTORY Lite3_description DESTINATION lib/${PROJECT_NAME})
+
+if(BUILD_TESTING AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/mpc/tests/native_benchmark.cpp"
+    AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/mpc/tests/native_mapper_probe.cpp")
+  add_executable(native_benchmark mpc/tests/native_benchmark.cpp)
+  target_include_directories(native_benchmark PRIVATE ${MUJOCO_ROOT}/include)
+  target_link_libraries(native_benchmark pybind11::embed ${MUJOCO_LIBRARY})
+  add_executable(native_mapper_probe mpc/tests/native_mapper_probe.cpp)
+  target_include_directories(native_mapper_probe PRIVATE ${MUJOCO_ROOT}/include)
+  target_link_libraries(native_mapper_probe ${MUJOCO_LIBRARY})
+endif()
 
 ament_package()

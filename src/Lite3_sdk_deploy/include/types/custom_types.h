@@ -16,7 +16,7 @@ namespace types{
         StandingUp      = 1,
         JointDamping    = 2,
         LieDown         = 3,
-        RLControlMode   = 6,
+        ControlMode     = 6,
     };
 
     enum StateName{
@@ -25,7 +25,7 @@ namespace types{
         kStandUp      = 1,
         kJointDamping = 2,
         kLieDown      = 3,
-        kRLControl    = 6,
+        kControl      = 6,
     };
 
     enum RemoteCommandType{

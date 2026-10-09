@@ -103,12 +103,14 @@ private:
             usr_cmd_->target_mode = uint8_t(RobotMotionState::StandingUp);
             std::cout << "[MODE] Standing Up\n";
         }
-        else if (keycode == KEY_C && msfb_->GetCurrentState() == RobotMotionState::StandingUp) {
-            usr_cmd_->target_mode = uint8_t(RobotMotionState::RLControlMode);
-            std::cout << "[MODE] RL Control\n";
+        else if (keycode == KEY_C && 
+            (msfb_->GetCurrentState() == RobotMotionState::StandingUp|| msfb_->GetCurrentState() == RobotMotionState::ControlMode)
+            ) {
+            std::string current_controller = RequestNextController();
+            std::cout << "[CONTROLLER] Controller: "<< current_controller << std::endl;
         }
         else if (keycode == KEY_X && (msfb_->GetCurrentState() == RobotMotionState::StandingUp
-            || msfb_->GetCurrentState() == RobotMotionState::RLControlMode)) {
+            || msfb_->GetCurrentState() == RobotMotionState::ControlMode)) {
             usr_cmd_->target_mode = uint8_t(RobotMotionState::LieDown);
             std::cout << "[MODE] Lie Down\n";
         }
@@ -176,7 +178,12 @@ private:
                   << "╚════════════════════════════════════════════════╝\n"
                   << "  Hold W/S/A/D/Q/E → velocity ramps up\n"
                   << "  Release key      → instant stop on that axis\n"
-                  << "  Modes: R (damping)  Z (stand)  C (RL control)  X (lie down)\n\n";
+                  << "  Modes: R (damping)  Z (stand)  C (select controller)  X (lie down)\n\n";
+        std::cout << "  Available controllers (C cycles in this order):";
+        for (const auto& name : GetAvailableControllers())
+            std::cout << " " << name;
+        std::cout << "\n\n";
+
 
         struct input_event ev;
 
@@ -235,7 +242,7 @@ private:
                 std::chrono::steady_clock::now().time_since_epoch()).count() / 1000.0;
 
             // Optional nice live display
-            if (msfb_->GetCurrentState() == RobotMotionState::RLControlMode) {
+            if (msfb_->GetCurrentState() == RobotMotionState::ControlMode) {
                 std::cout << "\rvel: " << fwd << "  " << side << "  " << yaw << std::flush;
             }
 

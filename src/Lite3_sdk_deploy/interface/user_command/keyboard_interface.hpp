@@ -105,12 +105,14 @@ private:
             usr_cmd_->target_mode = uint8_t(RobotMotionState::StandingUp);
             std::cout << "[MODE] Standing Up\n";
         }
-        else if (k == 'c' && msfb_->GetCurrentState() == RobotMotionState::StandingUp) {
-            usr_cmd_->target_mode = uint8_t(RobotMotionState::RLControlMode);
-            std::cout << "[MODE] RL Control\n";
+        else if (k == 'c' && 
+            (msfb_->GetCurrentState() == RobotMotionState::StandingUp|| msfb_->GetCurrentState() == RobotMotionState::ControlMode)
+            ) {
+            std::string current_controller = RequestNextController();
+            std::cout << "[CONTROLLER] Current controller: "<< current_controller << std::endl;
         }
         else if (k == 'x' && (msfb_->GetCurrentState() == RobotMotionState::StandingUp
-            || msfb_->GetCurrentState() == RobotMotionState::RLControlMode)) {
+            || msfb_->GetCurrentState() == RobotMotionState::ControlMode)) {
             usr_cmd_->target_mode = uint8_t(RobotMotionState::LieDown);
             std::cout << "[MODE] Lie Down\n";
         }
@@ -125,8 +127,13 @@ private:
                   << "╚════════════════════════════════════════════════╝\n"
                   << "  Movement:  W/S (forward/back)  A/D (left/right)\n"
                   << "  Rotation:  Q (CCW)  E (CW)\n"
-                  << "  Mode:      R (damping)  Z (stand)  C (control)  X (lie down)\n"
+                  << "  Mode:      R (damping)  Z (stand)  C (next controller)  X (lie down)\n"
                   << "\n";
+        std::cout << "  Available controllers (C cycles in this order):";
+        for (const auto& name : GetAvailableControllers())
+            std::cout << " " << name;
+        std::cout << "\n\n";
+
 
         char ch;
 
@@ -172,7 +179,7 @@ private:
             // Compute velocity from all currently held keys
             float fwd = 0.0f, side = 0.0f, yaw = 0.0f;
             
-            if (msfb_->GetCurrentState() == RobotMotionState::RLControlMode) {
+            if (msfb_->GetCurrentState() == RobotMotionState::ControlMode) {
                 compute_velocity_from_held_keys(fwd, side, yaw);
             }
             

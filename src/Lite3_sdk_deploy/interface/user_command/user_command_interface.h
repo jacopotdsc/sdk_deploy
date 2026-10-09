@@ -11,6 +11,10 @@
 #pragma once
 
 #include "common_types.h"
+#include <atomic>
+#include <mutex>
+#include <string>
+#include <vector>
 #include "custom_types.h"
 #include "motion_state_feedback.hpp"
 
@@ -20,7 +24,10 @@ namespace interface{
 
 class UserCommandInterface{
 private:
-    /* data */
+    std::atomic<bool> controller_selection_requested_{false};
+    std::mutex controller_name_mutex_;
+    std::string active_controller_name_ = "";
+    std::vector<std::string> available_controllers_;
 public:
     UserCommandInterface(RobotName robot_name){
         robot_name_ = robot_name;
@@ -58,7 +65,29 @@ public:
     virtual void SetSafetyMode(uint8_t mode) { usr_cmd_->safe_control_mode = mode; }
     virtual void SetTargetMode(uint8_t mode) { usr_cmd_->target_mode = mode; }
 
-    MotionStateFeedback *msfb_;
+    // Configure once before Start(), from the FSM's registered controller list.
+    void SetAvailableControllers(const std::vector<std::string>& names) {
+        available_controllers_ = names;
+    }
+    const std::vector<std::string>& GetAvailableControllers() const {
+        return available_controllers_;
+    }
+
+    // Return the current controller, not an unvalidated future selection.
+    std::string RequestNextController() {
+        std::lock_guard<std::mutex> lock(controller_name_mutex_);
+        const std::string current = active_controller_name_;
+        usr_cmd_->target_mode = uint8_t(RobotMotionState::ControlMode);
+        controller_selection_requested_.store(true);
+        return current;
+    }
+    void SetActiveControllerName(const std::string& name) {
+        std::lock_guard<std::mutex> lock(controller_name_mutex_);
+        active_controller_name_ = name.empty() ? "none" : name;
+    }
+    bool ConsumeControllerSelection() { return controller_selection_requested_.exchange(false); }
+
+    MotionStateFeedback *msfb_ = nullptr;
     RobotName robot_name_;
     UserCommand *usr_cmd_;
 };

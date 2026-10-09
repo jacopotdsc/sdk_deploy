@@ -1,5 +1,5 @@
 /**
- * @file rl_control_state.hpp
+ * @file rl_controller.hpp
  * @brief rl policy runnning state for quadruped robot
  * @author DeepRobotics
  * @version 1.0
@@ -9,7 +9,7 @@
  * 
  */
 #pragma once
-#include "state_base.h"
+#include "motion_controller.hpp"
 #include "policy_runner_base.hpp"
 #include "lite3_policy_runner.hpp"
 #include "robot_interface.h"
@@ -18,16 +18,16 @@
 #include "basic_function.hpp"
 
 namespace q {
-    class RLControlState : public StateBase {
+    class RLController : public MotionController {
     private:
         RobotBasicState rbs_;
-        int state_run_cnt_;
+        std::atomic<int> state_run_cnt_{-1};
 
         std::shared_ptr<PolicyRunnerBase> policy_ptr_;
         std::shared_ptr<Lite3PolicyRunner> lite3_policy_;
 
         std::thread run_policy_thread_;
-        bool start_flag_ = true;
+        std::atomic<bool> start_flag_{false};
 
         double policy_cost_time_ = 1;
 
@@ -76,8 +76,7 @@ namespace q {
         }
 
     public:
-        RLControlState(const RobotName &robot_name, const std::string &state_name,
-                       std::shared_ptr<ControllerData> data_ptr) : StateBase(robot_name, state_name, data_ptr) {
+        RLController(const RobotName &robot_name, std::shared_ptr<ControllerData> data_ptr) : MotionController(robot_name, data_ptr) {
             std::memset(&rbs_, 0, sizeof(rbs_));
             if (robot_name_ == RobotName::Lite3) {
                 namespace fs = std::filesystem;
@@ -95,14 +94,14 @@ namespace q {
             init_rbs_();
         }
 
-        ~RLControlState() {}
+        ~RLController() {}
 
         virtual void OnEnter() {
             state_run_cnt_ = -1;
             start_flag_ = true;
-            run_policy_thread_ = std::thread(std::bind(&RLControlState::PolicyRunner, this));
+            UpdateRobotObservation();
             policy_ptr_->OnEnter(rbs_);
-            StateBase::msfb_.UpdateCurrentState(RobotMotionState::RLControlMode);
+            run_policy_thread_ = std::thread(std::bind(&RLController::PolicyRunner, this));
         };
 
         virtual void OnExit() {
@@ -130,11 +129,6 @@ namespace q {
             return false;
         }
 
-        virtual StateName GetNextStateName() {
-            if (uc_ptr_->GetUserCommand()->safe_control_mode != 0) return StateName::kJointDamping;
-            if (uc_ptr_->GetUserCommand()->target_mode == uint8_t(RobotMotionState::LieDown))
-                return StateName::kLieDown;
-            return StateName::kRLControl;
-        }
+        bool IsReady() override { return policy_ptr_ != nullptr; }
     };
 };

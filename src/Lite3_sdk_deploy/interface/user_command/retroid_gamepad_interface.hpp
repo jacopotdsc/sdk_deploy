@@ -111,15 +111,18 @@ private:
                         break;
                     case RobotMotionState::StandingUp:
                         if (A_pressed && !A_last) {
-                            usr_cmd_->target_mode = uint8_t(RobotMotionState::RLControlMode);
-                            RCLCPP_INFO(node_->get_logger(), "Mode: RL Control");
+                            std::string current_controller = RequestNextController();
+                            std::cout << "[CONTROLLER] Current controller: " << current_controller << std::endl;
                         } else if (X_pressed && !X_last) {
                             usr_cmd_->target_mode = uint8_t(RobotMotionState::LieDown);
                             RCLCPP_INFO(node_->get_logger(), "Mode: Lie Down");
                         }
                         break;
-                    case RobotMotionState::RLControlMode:
-                        if (X_pressed && !X_last) {
+                    case RobotMotionState::ControlMode:
+                        if (A_pressed && !A_last) {
+                            std::string current_controller = RequestNextController();
+                            std::cout << "[CONTROLLER] Current controller: " << current_controller << std::endl;
+                        } else if (X_pressed && !X_last) {
                             usr_cmd_->target_mode = uint8_t(RobotMotionState::LieDown);
                             RCLCPP_INFO(node_->get_logger(), "Mode: Lie Down");
                         }
