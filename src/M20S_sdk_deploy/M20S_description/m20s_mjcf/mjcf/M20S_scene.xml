@@ -1,4 +1,0 @@
-<mujoco model="M20S_scene">
-    <include file="./M20S.xml"/>
-    <include file="./scene.xml"/>
-</mujoco>
