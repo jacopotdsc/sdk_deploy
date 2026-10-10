@@ -49,7 +49,6 @@ class RetroidGamepadInterface : public UserCommandInterface {
 private:
     rclcpp::Node::SharedPtr node_;
     rclcpp::Subscription<drdds::msg::GamepadData>::SharedPtr gamepad_sub_;
-    std::mutex cmd_mutex_;
     std::atomic<bool> running_{false};
     
     uint16_t last_buttons_ = 0;
@@ -73,7 +72,8 @@ private:
             first_callback = false;
         }
         
-        std::lock_guard<std::mutex> lock(cmd_mutex_);
+        std::unique_lock<std::mutex> lock(command_mutex_);
+        if (!running_) return;
         
         // 更新速度指令（始终更新，不依赖按键变化）
         usr_cmd_->forward_vel_scale = msg->left_axis_y;
@@ -111,8 +111,9 @@ private:
                         break;
                     case RobotMotionState::StandingUp:
                         if (A_pressed && !A_last) {
-                            std::string current_controller = RequestNextController();
-                            std::cout << "[CONTROLLER] Current controller: " << current_controller << std::endl;
+                            lock.unlock();
+                            RequestNextController();
+                            lock.lock();
                         } else if (X_pressed && !X_last) {
                             usr_cmd_->target_mode = uint8_t(RobotMotionState::LieDown);
                             RCLCPP_INFO(node_->get_logger(), "Mode: Lie Down");
@@ -120,8 +121,9 @@ private:
                         break;
                     case RobotMotionState::ControlMode:
                         if (A_pressed && !A_last) {
-                            std::string current_controller = RequestNextController();
-                            std::cout << "[CONTROLLER] Current controller: " << current_controller << std::endl;
+                            lock.unlock();
+                            RequestNextController();
+                            lock.lock();
                         } else if (X_pressed && !X_last) {
                             usr_cmd_->target_mode = uint8_t(RobotMotionState::LieDown);
                             RCLCPP_INFO(node_->get_logger(), "Mode: Lie Down");
@@ -196,7 +198,7 @@ public:
         if (!running_) return;
         running_ = false;
         
-        std::lock_guard<std::mutex> lock(cmd_mutex_);
+        std::lock_guard<std::mutex> lock(command_mutex_);
         usr_cmd_->forward_vel_scale = 0.0f;
         usr_cmd_->side_vel_scale = 0.0f;
         usr_cmd_->turnning_vel_scale = 0.0f;
@@ -205,7 +207,7 @@ public:
     }
 
     UserCommand* GetUserCommand() override {
-        return usr_cmd_;
+        return CommandSnapshot();
     }
 
     rclcpp::Node::SharedPtr get_node() {

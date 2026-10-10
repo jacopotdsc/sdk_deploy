@@ -39,6 +39,7 @@ XML_PATH = str(XML_PATH.resolve())
 
 
 USE_VIEWER = os.environ.get("SDK_SIM_HEADLESS", "0") != "1"
+FOLLOW_ROBOT = os.environ.get("SDK_SIM_FOLLOW", os.environ.get("SDK_SIM_FLAT", "0")) == "1"
 DT = 0.001
 RENDER_INTERVAL = 50
 
@@ -88,7 +89,7 @@ class MuJoCoSimulationNode(Node):
         self.get_logger().info(f"[INFO] MuJoCo model loaded, dof = {self.dof_num}")
 
         # ROS Publishers
-        self.mpc_state_pub = self.create_publisher(Float64MultiArray, 'lite3/mpc/sim_state', 1)
+        self.base_data_pub = self.create_publisher(Float64MultiArray, '/BASE_DATA', 1)
         self.imu_pub = self.create_publisher(ImuData, '/IMU_DATA', 200)
         self.joints_pub = self.create_publisher(JointsData, '/JOINTS_DATA', 200)
 
@@ -162,6 +163,9 @@ class MuJoCoSimulationNode(Node):
 
                 # 可视化
                 if self.viewer and step % RENDER_INTERVAL == 0:
+                    if FOLLOW_ROBOT:
+                        with self.viewer.lock():
+                            self.viewer.cam.lookat[:] = self.data.qpos[:3] + np.array([0., 0., .1])
                     self.viewer.sync()
 
             # Handle ROS callbacks
@@ -207,10 +211,10 @@ class MuJoCoSimulationNode(Node):
     # --------------------------------------------------------
 
     def _publish_robot_state(self, step: int):
-        # Complete floating-base state for simulation-only SRBD control.
-        mpc_state = Float64MultiArray()
-        mpc_state.data = np.concatenate([[self.timestamp], self.data.qpos[:19], self.data.qvel[:18]]).tolist()
-        self.mpc_state_pub.publish(mpc_state)
+        # Simulation-only base data: [time, x, y, z, vx, vy, vz].
+        # Position and linear velocity are expressed in the world frame.
+        base_data = Float64MultiArray()
+        base_data.data = np.concatenate([[self.timestamp], self.data.qpos[:3], self.data.qvel[:3]]).tolist()
 
         # ----- IMU -----
         # q_world = self.data.sensordata[:4]  # quaternion
@@ -282,6 +286,8 @@ class MuJoCoSimulationNode(Node):
             joint.status_word = 1
         self.joints_pub.publish(joints_msg)
 
+        # Advance the base sample after publishing its IMU and joint feedback.
+        self.base_data_pub.publish(base_data)
 
 if __name__ == "__main__":
     np.set_printoptions(precision=4, suppress=True)

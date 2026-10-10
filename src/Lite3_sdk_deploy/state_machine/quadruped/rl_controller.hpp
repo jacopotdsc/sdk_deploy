@@ -16,12 +16,15 @@
 #include "user_command_interface.h"
 #include "json.hpp"
 #include "basic_function.hpp"
+#include <atomic>
+#include <mutex>
 
 namespace q {
     class RLController : public MotionController {
     private:
         RobotBasicState rbs_;
-        std::atomic<int> state_run_cnt_{-1};
+        std::mutex observation_mutex_;
+        int state_run_cnt_ = -1; // guarded by observation_mutex_ while the worker runs
 
         std::shared_ptr<PolicyRunnerBase> policy_ptr_;
         std::shared_ptr<Lite3PolicyRunner> lite3_policy_;
@@ -56,16 +59,24 @@ namespace q {
         void PolicyRunner() {
             int run_cnt_record = -1;
             while (start_flag_) {
+                int run_count;
+                RobotBasicState observation;
+                {
+                    std::lock_guard<std::mutex> lock(observation_mutex_);
+                    run_count = state_run_cnt_;
+                    if (run_count % policy_ptr_->decimation_ == 0 && run_count != run_cnt_record)
+                        observation = rbs_;
+                }
 
-                if (state_run_cnt_ % policy_ptr_->decimation_ == 0 && state_run_cnt_ != run_cnt_record) {
+                if (run_count % policy_ptr_->decimation_ == 0 && run_count != run_cnt_record) {
                     timespec start_timestamp, end_timestamp;
                     clock_gettime(CLOCK_MONOTONIC, &start_timestamp);
-                    auto ra = policy_ptr_->getRobotAction(rbs_, *(uc_ptr_->GetUserCommand()));
+                    auto ra = policy_ptr_->getRobotAction(observation, *(uc_ptr_->GetUserCommand()));
                     
                     MatXf res = ra.ConvertToMat();
 
                     ri_ptr_->SetJointCommand(res);
-                    run_cnt_record = state_run_cnt_;
+                    run_cnt_record = run_count;
                     clock_gettime(CLOCK_MONOTONIC, &end_timestamp);
                     policy_cost_time_ = (end_timestamp.tv_sec - start_timestamp.tv_sec) * 1e3
                                         + (end_timestamp.tv_nsec - start_timestamp.tv_nsec) / 1e6;
@@ -98,19 +109,19 @@ namespace q {
 
         virtual void OnEnter() {
             state_run_cnt_ = -1;
-            start_flag_ = true;
-            UpdateRobotObservation();
             policy_ptr_->OnEnter(rbs_);
+            start_flag_ = true;
             run_policy_thread_ = std::thread(std::bind(&RLController::PolicyRunner, this));
         };
 
         virtual void OnExit() {
             start_flag_ = false;
-            run_policy_thread_.join();
+            if (run_policy_thread_.joinable()) run_policy_thread_.join();
             state_run_cnt_ = -1;
         }
 
         virtual void Run() {
+            std::lock_guard<std::mutex> lock(observation_mutex_);
             UpdateRobotObservation();
             state_run_cnt_++;
         }

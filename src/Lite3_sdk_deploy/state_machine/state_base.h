@@ -41,7 +41,6 @@ public:
             ri_ptr_ = data_ptr_->ri_ptr;
             uc_ptr_ = data_ptr_->uc_ptr;
             cp_ptr_ = data_ptr_->cp_ptr;
-            std::memset(&msfb_, 0, sizeof(msfb_));
         }
 
     ~StateBase(){}

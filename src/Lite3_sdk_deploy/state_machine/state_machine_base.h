@@ -133,7 +133,7 @@ public:
                         char buf[128];
                         snprintf(buf, sizeof(buf),
                             "Executing: current_state='%s' -> kJointDamping (run_cnt=%d)",
-                            current_controller_->state_name_.c_str(), run_cnt_);
+                            current_controller_->state_name_.c_str(), run_cnt_.load());
                         topic_trace::LogEstopEvent(ri_ptr_->get_node()->get_logger(), "[ESTOP]", buf);
                     }
                     uc_ptr_->SetTargetMode(uint8_t(RobotMotionState::JointDamping));
@@ -171,7 +171,7 @@ public:
     
     const RobotType robot_type_;
 
-    int run_cnt_ = 0;
+    std::atomic<int> run_cnt_{0};
     double _dt = 0.001, startTime;
     TimeTool set_timer{};
 
@@ -207,8 +207,8 @@ public:
                     "Received /EMERGENCY_STOP_SIGNAL value=%d, "
                     "current_state='%s', run_cnt=%d",
                     msg->value,
-                    current_controller_ ? current_controller_->state_name_.c_str() : "nullptr",
-                    run_cnt_);
+                    sdk_control::StateLabel(StateBase::msfb_.GetCurrentState()).c_str(),
+                    run_cnt_.load());
                 topic_trace::LogEstopEvent(ri_ptr_->get_node()->get_logger(), "[ESTOP][4/4]", buf);
                 emergency_stop_requested_.store(true);
                 topic_trace::LogEstopEvent(ri_ptr_->get_node()->get_logger(), "[ESTOP][4/4]",

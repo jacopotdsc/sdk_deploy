@@ -37,7 +37,6 @@ private:
     float fwd = 0.0f, side = 0.0f, yaw = 0.0f;
 
     std::unordered_set<int> pressed_keys_;
-    mutable std::mutex keys_mutex_;
 
     struct EvDevKeyboard {
         int fd;
@@ -54,13 +53,13 @@ private:
 
     bool isKeyPressed(int keycode) const
     {
-        std::lock_guard<std::mutex> lock(keys_mutex_);
         return pressed_keys_.count(keycode);
     }
 
     // Called on press (value=1) and repeat (value=2)
     void apply_key_direction(int keycode)
     {
+        std::lock_guard<std::mutex> command_lock(command_mutex_);
         const float step = 0.1f;
 
         if (keycode == KEY_W)       fwd  +=  step * max_forward_;
@@ -95,11 +94,13 @@ private:
     void process_mode_key(int keycode)
     {
         if (keycode == KEY_R) {
+            std::lock_guard<std::mutex> command_lock(command_mutex_);
             usr_cmd_->target_mode = uint8_t(RobotMotionState::JointDamping);
             std::cout << "[MODE] Joint Damping\n";
         }
         else if (keycode == KEY_Z && (msfb_->GetCurrentState() == RobotMotionState::WaitingForStand
             || msfb_->GetCurrentState() == RobotMotionState::LieDown)) {
+            std::lock_guard<std::mutex> command_lock(command_mutex_);
             usr_cmd_->target_mode = uint8_t(RobotMotionState::StandingUp);
             std::cout << "[MODE] Standing Up\n";
         }
@@ -111,6 +112,7 @@ private:
         }
         else if (keycode == KEY_X && (msfb_->GetCurrentState() == RobotMotionState::StandingUp
             || msfb_->GetCurrentState() == RobotMotionState::ControlMode)) {
+            std::lock_guard<std::mutex> command_lock(command_mutex_);
             usr_cmd_->target_mode = uint8_t(RobotMotionState::LieDown);
             std::cout << "[MODE] Lie Down\n";
         }
@@ -199,7 +201,6 @@ private:
 
                     // Update pressed state
                     {
-                        std::lock_guard<std::mutex> lock(keys_mutex_);
                         if (ev.value == 1 || ev.value == 2) {
                             pressed_keys_.insert(ev.code);
                         } else if (ev.value == 0) {
@@ -235,11 +236,14 @@ private:
             }
 
             // ─────── CRITICAL: ALWAYS publish current values every loop ───────
-            usr_cmd_->forward_vel_scale  = fwd;
-            usr_cmd_->side_vel_scale     = side;
-            usr_cmd_->turnning_vel_scale = yaw;
-            usr_cmd_->time_stamp = std::chrono::duration_cast<std::chrono::milliseconds>(
-                std::chrono::steady_clock::now().time_since_epoch()).count() / 1000.0;
+            {
+                std::lock_guard<std::mutex> command_lock(command_mutex_);
+                usr_cmd_->forward_vel_scale  = fwd;
+                usr_cmd_->side_vel_scale     = side;
+                usr_cmd_->turnning_vel_scale = yaw;
+                usr_cmd_->time_stamp = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now().time_since_epoch()).count() / 1000.0;
+            }
 
             // Optional nice live display
             if (msfb_->GetCurrentState() == RobotMotionState::ControlMode) {
@@ -280,13 +284,15 @@ public:
         }
         keyboards_.clear();
 
+        std::lock_guard<std::mutex> command_lock(command_mutex_);
         usr_cmd_->forward_vel_scale = usr_cmd_->side_vel_scale = usr_cmd_->turnning_vel_scale = 0.0f;
     }
 
-    UserCommand* GetUserCommand() override { return usr_cmd_; }
+    UserCommand* GetUserCommand() override { return CommandSnapshot(); }
 
     void set_max_velocities(float fwd, float side, float yaw)
     {
+        std::lock_guard<std::mutex> command_lock(command_mutex_);
         max_forward_ = std::abs(fwd);
         max_side_    = std::abs(side);
         max_yaw_     = std::abs(yaw);

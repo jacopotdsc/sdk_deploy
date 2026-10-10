@@ -24,7 +24,6 @@ class KeyboardInterface : public UserCommandInterface
 private:
     std::atomic<bool> running_{false};
     std::thread kb_thread_;
-    mutable std::mutex keys_mutex_;
 
     float max_forward_ = 0.7f;
     float max_side_    = 0.5f;
@@ -77,8 +76,6 @@ private:
         side = 0.0f;
         yaw = 0.0f;
 
-        std::lock_guard<std::mutex> lock(keys_mutex_);
-        
         if (held_keys_.count('w')) fwd += max_forward_;
         if (held_keys_.count('s')) fwd -= max_forward_;
         if (held_keys_.count('a')) side += max_side_;
@@ -94,14 +91,17 @@ private:
     void process_mode_command(char k)
     {
         if (k == 'r') {
+            std::lock_guard<std::mutex> command_lock(command_mutex_);
             usr_cmd_->target_mode = uint8_t(RobotMotionState::JointDamping);
             std::cout << "[MODE] Joint Damping\n";
         }
         else if (k == 'z' && msfb_->GetCurrentState() == RobotMotionState::WaitingForStand) {
+            std::lock_guard<std::mutex> command_lock(command_mutex_);
             usr_cmd_->target_mode = uint8_t(RobotMotionState::StandingUp);
             std::cout << "[MODE] Standing Up\n";
         }
         else if (k == 'z' && msfb_->GetCurrentState() == RobotMotionState::LieDown) {
+            std::lock_guard<std::mutex> command_lock(command_mutex_);
             usr_cmd_->target_mode = uint8_t(RobotMotionState::StandingUp);
             std::cout << "[MODE] Standing Up\n";
         }
@@ -113,6 +113,7 @@ private:
         }
         else if (k == 'x' && (msfb_->GetCurrentState() == RobotMotionState::StandingUp
             || msfb_->GetCurrentState() == RobotMotionState::ControlMode)) {
+            std::lock_guard<std::mutex> command_lock(command_mutex_);
             usr_cmd_->target_mode = uint8_t(RobotMotionState::LieDown);
             std::cout << "[MODE] Lie Down\n";
         }
@@ -139,7 +140,6 @@ private:
 
         while (running_) {
             double now = GetCurrentTimeStamp();
-            usr_cmd_->time_stamp = now;
 
             // Read all available keyboard input
             while (read(STDIN_FILENO, &ch, 1) == 1) {
@@ -153,7 +153,6 @@ private:
 
                 // Track velocity keys
                 if (velocity_keys_.count(k)) {
-                    std::lock_guard<std::mutex> lock(keys_mutex_);
                     held_keys_.insert(k);
                     last_seen_time_[k] = now;
                 }
@@ -161,7 +160,6 @@ private:
 
             // Remove keys that haven't been seen recently (released)
             {
-                std::lock_guard<std::mutex> lock(keys_mutex_);
                 std::vector<char> to_remove;
                 
                 for (char k : held_keys_) {
@@ -176,16 +174,20 @@ private:
                 }
             }
 
-            // Compute velocity from all currently held keys
-            float fwd = 0.0f, side = 0.0f, yaw = 0.0f;
-            
-            if (msfb_->GetCurrentState() == RobotMotionState::ControlMode) {
-                compute_velocity_from_held_keys(fwd, side, yaw);
+            {
+                std::lock_guard<std::mutex> command_lock(command_mutex_);
+                usr_cmd_->time_stamp = now;
+                // Compute velocity from all currently held keys
+                float fwd = 0.0f, side = 0.0f, yaw = 0.0f;
+                
+                if (msfb_->GetCurrentState() == RobotMotionState::ControlMode) {
+                    compute_velocity_from_held_keys(fwd, side, yaw);
+                }
+
+                usr_cmd_->forward_vel_scale  = fwd;
+                usr_cmd_->side_vel_scale     = side;
+                usr_cmd_->turnning_vel_scale = yaw;
             }
-            
-            usr_cmd_->forward_vel_scale  = fwd;
-            usr_cmd_->side_vel_scale     = side;
-            usr_cmd_->turnning_vel_scale = yaw;
 
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
         }
@@ -220,27 +222,28 @@ public:
             kb_thread_.join();
         }
         
-        std::lock_guard<std::mutex> lock(keys_mutex_);
         held_keys_.clear();
         last_seen_time_.clear();
         
+        std::lock_guard<std::mutex> command_lock(command_mutex_);
         usr_cmd_->forward_vel_scale = 0.0f;
         usr_cmd_->side_vel_scale = 0.0f;
         usr_cmd_->turnning_vel_scale = 0.0f;
     }
 
-    UserCommand* GetUserCommand() override 
-    { 
-        return usr_cmd_; 
+    UserCommand* GetUserCommand() override
+    {
+        return CommandSnapshot();
     }
 
     void set_max_velocities(float fwd, float side, float yaw)
     {
+        std::lock_guard<std::mutex> command_lock(command_mutex_);
         max_forward_ = std::abs(fwd);
         max_side_    = std::abs(side);
         max_yaw_     = std::abs(yaw);
-        std::cout << "[CONFIG] Max velocities: fwd=" << max_forward_ 
-                  << " side=" << max_side_ 
+        std::cout << "[CONFIG] Max velocities: fwd=" << max_forward_
+                  << " side=" << max_side_
                   << " yaw=" << max_yaw_ << "\n";
     }
 };

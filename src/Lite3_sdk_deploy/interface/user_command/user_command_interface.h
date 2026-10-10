@@ -24,10 +24,19 @@ namespace interface{
 
 class UserCommandInterface{
 private:
-    std::atomic<bool> controller_selection_requested_{false};
-    std::mutex controller_name_mutex_;
     std::string active_controller_name_ = "";
     std::vector<std::string> available_controllers_;
+protected:
+    std::atomic<bool> controller_selection_requested_{false};
+    std::mutex command_mutex_;
+    UserCommand* CommandSnapshot() {
+        thread_local UserCommand snapshot;
+        std::lock_guard<std::mutex> lock(command_mutex_);
+        snapshot = *usr_cmd_;
+        return &snapshot;
+    }
+
+
 public:
     UserCommandInterface(RobotName robot_name){
         robot_name_ = robot_name;
@@ -62,9 +71,14 @@ public:
         msfb_ = msfb;
     }
 
-    virtual void SetSafetyMode(uint8_t mode) { usr_cmd_->safe_control_mode = mode; }
-    virtual void SetTargetMode(uint8_t mode) { usr_cmd_->target_mode = mode; }
-
+    virtual void SetSafetyMode(uint8_t mode) {
+        std::lock_guard<std::mutex> lock(command_mutex_);
+        usr_cmd_->safe_control_mode = mode;
+    }
+    virtual void SetTargetMode(uint8_t mode) {
+        std::lock_guard<std::mutex> lock(command_mutex_);
+        usr_cmd_->target_mode = mode;
+    }
     // Configure once before Start(), from the FSM's registered controller list.
     void SetAvailableControllers(const std::vector<std::string>& names) {
         available_controllers_ = names;
@@ -75,14 +89,14 @@ public:
 
     // Return the current controller, not an unvalidated future selection.
     std::string RequestNextController() {
-        std::lock_guard<std::mutex> lock(controller_name_mutex_);
+        std::lock_guard<std::mutex> lock(command_mutex_);
         const std::string current = active_controller_name_;
         usr_cmd_->target_mode = uint8_t(RobotMotionState::ControlMode);
         controller_selection_requested_.store(true);
         return current;
     }
     void SetActiveControllerName(const std::string& name) {
-        std::lock_guard<std::mutex> lock(controller_name_mutex_);
+        std::lock_guard<std::mutex> lock(command_mutex_);
         active_controller_name_ = name.empty() ? "none" : name;
     }
     bool ConsumeControllerSelection() { return controller_selection_requested_.exchange(false); }

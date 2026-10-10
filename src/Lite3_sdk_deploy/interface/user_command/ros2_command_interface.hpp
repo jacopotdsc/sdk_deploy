@@ -46,7 +46,7 @@ public:
         velocity_sub_ = node_->create_subscription<geometry_msgs::msg::Twist>(
             "~/cmd_vel", rclcpp::QoS(1).best_effort().durability_volatile(),
             [this](geometry_msgs::msg::Twist::SharedPtr msg) {
-                std::lock_guard<std::mutex> lock(mutex_);
+                std::lock_guard<std::mutex> lock(command_mutex_);
                 if (!running_) return;
                 if (!std::isfinite(msg->linear.x) || !std::isfinite(msg->linear.y) ||
                     !std::isfinite(msg->angular.z) || msg->linear.z != 0. ||
@@ -63,7 +63,7 @@ public:
         state_sub_ = node_->create_subscription<std_msgs::msg::String>(
             "~/command_state", rclcpp::QoS(1).reliable().durability_volatile(),
             [this](std_msgs::msg::String::SharedPtr msg) {
-                std::lock_guard<std::mutex> lock(mutex_);
+                std::lock_guard<std::mutex> lock(command_mutex_);
                 if (!running_) return;
                 int target = -1;
                 if (msg->data == "stand") target = types::StandingUp;
@@ -78,30 +78,26 @@ public:
     }
 
     void Start() override {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::mutex> lock(command_mutex_);
         running_ = true;
         have_velocity_ = false;
         pending_state_ = -1;
     }
     void Stop() override {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::mutex> lock(command_mutex_);
         running_ = false;
         ZeroVelocity();
     }
     types::UserCommand* GetUserCommand() override {
-        // Existing consumers use pointers. Each reader gets an independent snapshot.
-        thread_local types::UserCommand snapshot;
-        std::lock_guard<std::mutex> lock(mutex_);
-        snapshot = *usr_cmd_;
-        return &snapshot;
+        return CommandSnapshot();
     }
     void SetSafetyMode(uint8_t mode) override {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::mutex> lock(command_mutex_);
         usr_cmd_->safe_control_mode = mode;
         if (mode) { pending_state_ = -1; have_velocity_ = false; ZeroVelocity(); }
     }
     void SetTargetMode(uint8_t mode) override {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::mutex> lock(command_mutex_);
         usr_cmd_->target_mode = mode;
         pending_state_ = -1;
         have_velocity_ = false;
@@ -111,7 +107,7 @@ public:
     // Called by the FSM at 50 Hz, before it reads commands. State guards still
     // belong to the existing controllers (including stand/lie trajectory timing).
     void Update(uint8_t current_state) {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::mutex> lock(command_mutex_);
         if (!running_) return;
         const auto now = Clock::now();
         if (current_state == types::JointDamping && last_state_ != current_state) {
@@ -132,12 +128,8 @@ public:
                     (current_state == types::StandingUp || current_state == types::ControlMode)) ||
                 (pending_state_ == types::ControlMode && (current_state == types::StandingUp || current_state == types::ControlMode));
             if (fresh && allowed && usr_cmd_->safe_control_mode == 0) {
-                if (pending_state_ == types::ControlMode && current_state == types::ControlMode) {
-                    std::string current_controller = RequestNextController();
-                    std::cout << "[CONTROLLER] Next requested; current controller: " << current_controller << std::endl;
-                } else {
-                    usr_cmd_->target_mode = pending_state_;
-                }
+                usr_cmd_->target_mode = pending_state_;
+                controller_selection_requested_.store(pending_state_ == types::ControlMode && current_state == types::ControlMode);
                 if (pending_state_ != types::ControlMode) have_velocity_ = false;
             } else { ++rejected_; }
             pending_state_ = -1;
@@ -155,7 +147,7 @@ public:
     }
 
     void GetDiagnostics(bool& timed_out, uint64_t& rejected) {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::mutex> lock(command_mutex_);
         timed_out = timed_out_; rejected = rejected_;
     }
 
@@ -166,7 +158,6 @@ private:
         usr_cmd_->turnning_vel_scale = 0.f;
     }
     rclcpp::Node::SharedPtr node_;
-    std::mutex mutex_;
     bool running_{false}, have_velocity_{false}, timed_out_{true};
     uint8_t last_state_{types::WaitingForStand};
     int pending_state_{-1};

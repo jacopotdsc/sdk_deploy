@@ -35,3 +35,4 @@ venv/
 .env.*
 !.env.example
 .DS_Store
+/jax_cache/

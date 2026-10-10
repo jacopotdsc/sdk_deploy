@@ -73,7 +73,7 @@ private:
     double last_cmd_ts_, cmd_check_time_;
     bool cmd_check_flag_ = true;
 
-    bool start_thread_flag_ = false;
+    std::atomic<bool> start_thread_flag_{false};
 
     double driver_error_ts_;
     double joint_data_error_ts_;

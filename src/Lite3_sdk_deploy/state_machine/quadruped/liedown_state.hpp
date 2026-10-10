@@ -32,6 +32,9 @@ private:
     void RecordJointData(){
         init_joint_pos_ = current_joint_pos_;
         init_joint_vel_ = current_joint_vel_;
+        // Do not carry swing-joint velocity into the lowering spline.
+        if (msfb_.GetCurrentState() == RobotMotionState::ControlMode)
+            init_joint_vel_.setZero();
         time_stamp_record_ = run_time_;
     }
 

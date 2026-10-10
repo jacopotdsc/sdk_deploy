@@ -10,18 +10,19 @@
  */
 #pragma once
 #include "common_types.h"
+#include <atomic>
 
 class MotionStateFeedback
 {
 private:
-    uint8_t current_state_;
-    uint8_t current_gait_;
-    uint8_t last_state_;
-    uint8_t last_gait_;
+    std::atomic<uint8_t> current_state_{0};
+    uint8_t current_gait_{0};
+    uint8_t last_state_{0};
+    uint8_t last_gait_{0};
 
-    Vec3f current_vel_;
-    Vec3f cmd_vel_;
-    Vec3f max_vel_;
+    types::Vec3f current_vel_;
+    types::Vec3f cmd_vel_;
+    types::Vec3f max_vel_;
 
     union{
         struct{
@@ -33,7 +34,10 @@ private:
     };
 public:
     MotionStateFeedback(/* args */){
-        memset(this, 0, sizeof(MotionStateFeedback));
+        current_vel_.setZero();
+        cmd_vel_.setZero();
+        max_vel_.setZero();
+        error_code_ = 0;
         std::cout << "Motion State Feedback" << std::endl;
     }
     ~MotionStateFeedback(){
@@ -42,7 +46,7 @@ public:
 
     void UpdateCurrentState(int state){
         if(uint8_t(state) != current_state_){
-            last_state_ = current_state_;
+            last_state_ = current_state_.load();
             current_state_ = uint8_t(state);
         }
     }

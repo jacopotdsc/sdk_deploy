@@ -32,15 +32,15 @@ public:
     MPXController(const RobotName& robot, std::shared_ptr<ControllerData> data) : MotionController(robot, data) {
         auto node = ri_ptr_->get_node();
         ready_sub_ = node->create_subscription<std_msgs::msg::Bool>(
-            "lite3/mpc/ready", 1, [this](std_msgs::msg::Bool::SharedPtr msg) {
+            "/MPC_READY", 1, [this](std_msgs::msg::Bool::SharedPtr msg) {
                 std::lock_guard<std::mutex> lock(mutex_);
                 ready_ = msg->data;
                 ready_received_ = Clock::now();
             });
-        active_pub_ = node->create_publisher<std_msgs::msg::Bool>("lite3/mpc/active", 1);
-        velocity_pub_ = node->create_publisher<geometry_msgs::msg::Twist>("lite3/mpc/cmd_vel", 1);
+        active_pub_ = node->create_publisher<std_msgs::msg::Bool>("/MPC_ACTIVE", 1);
+        velocity_pub_ = node->create_publisher<geometry_msgs::msg::Twist>("/MPC_CMD_VEL", 1);
         torque_sub_ = node->create_subscription<std_msgs::msg::Float64MultiArray>(
-            "lite3/mpc/torque", 1, [this](std_msgs::msg::Float64MultiArray::SharedPtr msg) {
+            "/MPC_JOINTS_CMD", 1, [this](std_msgs::msg::Float64MultiArray::SharedPtr msg) {
                 std::lock_guard<std::mutex> lock(mutex_);
                 if (!active_ || msg->data.size() != 36) return;
                 for (double value : msg->data) if (!std::isfinite(value)) return;
