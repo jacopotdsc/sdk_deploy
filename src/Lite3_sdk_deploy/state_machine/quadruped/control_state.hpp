@@ -3,6 +3,7 @@
 #include "state_base.h"
 #include "rl_controller.hpp"
 #include "mpx_controller.hpp"
+#include "mpc_residual_controller.hpp"
 #include <vector>
 #include <stdexcept>
 
@@ -22,7 +23,8 @@ public:
     ControlState(RobotName robot, std::shared_ptr<ControllerData> data)
         : StateBase(robot, "control", data), controllers_{
             {"rl_controller", std::make_shared<RLController>(robot, data)},
-            {"mpx", std::make_shared<MPXController>(robot, data)},
+            {"mpx_controller", std::make_shared<MPXController>(robot, data)},
+            {"mpc_residual_controller", std::make_shared<MPCResidualController>(robot, data)},
         } {}
 
     const std::vector<ControllerEntry>& Controllers() const { return controllers_; }

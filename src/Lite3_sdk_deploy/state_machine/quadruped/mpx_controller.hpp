@@ -1,124 +1,197 @@
 #pragma once
 
 #include "motion_controller.hpp"
-#include "mpc_process.hpp"
-#include "std_msgs/msg/bool.hpp"
+#include "mpc_pipeline_client.hpp"
+#include "basic_function.hpp"
 #include "std_msgs/msg/float64_multi_array.hpp"
-#include "geometry_msgs/msg/twist.hpp"
+#include "drdds/msg/imu_data.hpp"
+#include "drdds/msg/joints_data.hpp"
+#include <array>
 #include <chrono>
+#include <memory>
 #include <mutex>
+#include <stdexcept>
+#include <limits>
 
 namespace q {
-// rl_deploy remains the only publisher of motor commands, including in MPC mode.
+// Common acquisition and MPC path for normal and residual controllers.
 class MPXController : public MotionController {
+protected:
+    static constexpr float kJointKp = 30.f;
+    static constexpr float kJointKd = 1.f;
+private:
     using Clock = std::chrono::steady_clock;
-    MPCProcess worker_;
-    rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr active_pub_;
-    rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr velocity_pub_;
-    rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr torque_sub_;
-    rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr ready_sub_;
-    bool ready_ = false;
-    Clock::time_point ready_received_;
+    using Array = std_msgs::msg::Float64MultiArray;
+    std::unique_ptr<lite3_mpc::MPCPipelineClient> pipeline_;
+    double epoch_ = 0.;
+    rclcpp::Subscription<Array>::SharedPtr base_sub_;
+    rclcpp::Subscription<drdds::msg::ImuData>::SharedPtr imu_sub_;
+    rclcpp::Subscription<drdds::msg::JointsData>::SharedPtr joints_sub_;
     std::mutex mutex_;
-    VecXf torque_ = VecXf::Zero(12), position_ = VecXf::Zero(12), velocity_ = VecXf::Zero(12), hold_position_;
-    Clock::time_point entered_, received_, published_;
-    bool active_ = false, have_torque_ = false;
-    void PublishActive(bool active) {
-        std_msgs::msg::Bool msg;
-        msg.data = active;
-        active_pub_->publish(msg);
+    RobotBasicState observation_{};
+    std::array<double, 7> base_{}; // timestamp, xyz, linear velocity
+    double imu_stamp_ = 0, joints_stamp_ = 0;
+    Clock::time_point base_received_, imu_received_, joints_received_;
+    Clock::time_point entered_, requested_, completed_;
+    bool have_base_ = false, have_imu_ = false, have_joints_ = false;
+    bool active_ = false, failed_ = false;
+    double requested_stamp_ = -std::numeric_limits<double>::infinity();
+    MatXf output_ = MatXf::Zero(12, 5);
+
+protected:
+    // The FSM combines the latest asynchronous WBC output with any residual action.
+    virtual std::chrono::milliseconds InferenceInterval() const { return std::chrono::milliseconds(5); }
+    virtual void ResetPolicy() {}
+    virtual MatXf ComputeCommand(const lite3_mpc::WBCOutput& mpc,
+                                const RobotBasicState&, const UserCommand&, double) {
+        RobotAction command;
+        command.tau_ff = mpc.torque;
+        command.goal_joint_pos = mpc.q_des;
+        command.goal_joint_vel = mpc.dq_des;
+        command.kp = VecXf::Constant(12,kJointKp);
+        command.kd = VecXf::Constant(12,kJointKd);
+        return command.ConvertToMat();
     }
+
 public:
-    MPXController(const RobotName& robot, std::shared_ptr<ControllerData> data) : MotionController(robot, data) {
+    MPXController(RobotName robot, std::shared_ptr<ControllerData> data)
+        : MotionController(robot, data) {
+        if (robot != RobotName::Lite3) throw std::invalid_argument("MPC supports Lite3 only");
+        observation_.joint_pos = observation_.joint_vel = VecXf::Zero(12);
         auto node = ri_ptr_->get_node();
-        ready_sub_ = node->create_subscription<std_msgs::msg::Bool>(
-            "/MPC_READY", 1, [this](std_msgs::msg::Bool::SharedPtr msg) {
+        pipeline_ = std::make_unique<lite3_mpc::MPCPipelineClient>(node);
+        base_sub_ = node->create_subscription<Array>("/BASE_DATA", 1, [this](Array::SharedPtr msg) {
+            if (msg->data.size() != 7) return;
+            for (double x : msg->data) if (!std::isfinite(x)) return;
+            std::lock_guard<std::mutex> lock(mutex_);
+            std::copy(msg->data.begin(), msg->data.end(), base_.begin());
+            base_received_ = Clock::now();
+            have_base_ = true;
+        });
+        imu_sub_ = node->create_subscription<drdds::msg::ImuData>(
+            "/IMU_DATA", rclcpp::SensorDataQoS().keep_last(1),
+            [this](drdds::msg::ImuData::SharedPtr msg) {
+                const auto& imu = msg->data;
+                const Vec3f rpy(Deg2Rad(imu.roll), Deg2Rad(imu.pitch), Deg2Rad(imu.yaw));
+                const Vec3f omega(imu.omega_x, imu.omega_y, imu.omega_z);
+                if (!rpy.allFinite() || !omega.allFinite()) return;
                 std::lock_guard<std::mutex> lock(mutex_);
-                ready_ = msg->data;
-                ready_received_ = Clock::now();
+                observation_.base_rpy = rpy;
+                observation_.base_rot_mat = RpyToRm(rpy);
+                observation_.base_omega = omega;
+                imu_stamp_ = rclcpp::Time(msg->header.stamp).seconds();
+                imu_received_ = Clock::now();
+                have_imu_ = true;
             });
-        active_pub_ = node->create_publisher<std_msgs::msg::Bool>("/MPC_ACTIVE", 1);
-        velocity_pub_ = node->create_publisher<geometry_msgs::msg::Twist>("/MPC_CMD_VEL", 1);
-        torque_sub_ = node->create_subscription<std_msgs::msg::Float64MultiArray>(
-            "/MPC_JOINTS_CMD", 1, [this](std_msgs::msg::Float64MultiArray::SharedPtr msg) {
-                std::lock_guard<std::mutex> lock(mutex_);
-                if (!active_ || msg->data.size() != 36) return;
-                for (double value : msg->data) if (!std::isfinite(value)) return;
+        joints_sub_ = node->create_subscription<drdds::msg::JointsData>(
+            "/JOINTS_DATA", 1, [this](drdds::msg::JointsData::SharedPtr msg) {
                 for (int i = 0; i < 12; ++i)
-                    torque_(i) = LimitNumber(float(msg->data[i]), -cp_ptr_->torque_limit_(i%3), cp_ptr_->torque_limit_(i%3));
+                    if (!std::isfinite(msg->data.joints_data[i].position) ||
+                        !std::isfinite(msg->data.joints_data[i].velocity)) return;
+                std::lock_guard<std::mutex> lock(mutex_);
                 for (int i = 0; i < 12; ++i) {
-                    position_(i) = float(msg->data[12+i]);
-                    velocity_(i) = float(msg->data[24+i]);
+                    observation_.joint_pos(i) = msg->data.joints_data[i].position;
+                    observation_.joint_vel(i) = msg->data.joints_data[i].velocity;
                 }
-                received_ = Clock::now();
-                have_torque_ = true;
+                joints_stamp_ = rclcpp::Time(msg->header.stamp).seconds();
+                joints_received_ = Clock::now();
+                have_joints_ = true;
             });
     }
     ~MPXController() override { Stop(); }
-    void Compile() override { worker_.Start(); }
+    void Compile() override {
+        try { pipeline_->Start(cp_ptr_->torque_limit_); }
+        catch(const std::exception& error){std::cerr << "[MPC] Initialization failed: " << error.what() << '\n';}
+    }
     void Stop() override {
+        {std::lock_guard<std::mutex> lock(mutex_);active_=false;}
+        if(pipeline_) { pipeline_->Deactivate(epoch_); pipeline_.reset(); }
+    }
+    bool IsReady() override { return pipeline_ && pipeline_->IsReady(); }
+
+    void OnEnter() override {
+        output_.setZero();
+        output_.col(1) = ri_ptr_->GetJointPosition();
+        output_.col(0).setConstant(kJointKp);
+        output_.col(2).setConstant(kJointKd);
+        ri_ptr_->SetJointCommand(output_);
+        ResetPolicy();
         {
             std::lock_guard<std::mutex> lock(mutex_);
-            ready_ = false;
-            active_ = false;
-            have_torque_ = false;
+            active_ = true;
+            failed_ = false;
+            epoch_ = pipeline_->Activate(*uc_ptr_->GetUserCommand());
+            entered_ = Clock::now();
+            requested_ = Clock::time_point{};
+            requested_stamp_ = -std::numeric_limits<double>::infinity();
+            completed_ = Clock::time_point{};
         }
-        worker_.Stop();
     }
-    bool IsReady() override {
-        std::lock_guard<std::mutex> lock(mutex_);
-        return ready_ && Clock::now()-ready_received_ < std::chrono::seconds(1);
-    }
-    void OnEnter() override {
-        hold_position_ = ri_ptr_->GetJointPosition();
-        { std::lock_guard<std::mutex> lock(mutex_);
-          active_ = true; have_torque_ = false; entered_ = Clock::now(); }
-        published_ = Clock::time_point{};
-        PublishActive(true);
-    }
+
     void OnExit() override {
-        { std::lock_guard<std::mutex> lock(mutex_); active_ = false; have_torque_ = false; }
-        PublishActive(false);
+        std::lock_guard<std::mutex> lock(mutex_);
+        active_ = false;
+        if(pipeline_) pipeline_->Deactivate(epoch_);
     }
+
     void Run() override {
         const auto now = Clock::now();
-        if (now - published_ >= std::chrono::milliseconds(20)) {
-            geometry_msgs::msg::Twist velocity;
-            auto command = uc_ptr_->GetUserCommand();
-            velocity.linear.x = command->forward_vel_scale;
-            velocity.linear.y = command->side_vel_scale;
-            velocity.angular.z = command->turnning_vel_scale;
-            velocity_pub_->publish(velocity);
-            PublishActive(true);
-            published_ = now;
+        RobotBasicState snapshot;
+        std::array<double, 7> base;
+        const UserCommand command = *uc_ptr_->GetUserCommand();
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (!active_ || failed_ || !pipeline_) return;
+            pipeline_->Update(epoch_,command);
+            const auto timeout = std::chrono::milliseconds(150);
+            const bool coherent = have_base_ && have_imu_ && have_joints_ &&
+                now - base_received_ < timeout && now - imu_received_ < timeout &&
+                now - joints_received_ < timeout && std::abs(base_[0] - imu_stamp_) <= .01 &&
+                std::abs(base_[0] - joints_stamp_) <= .01;
+            // Schedule on telemetry time: wall-clock callback jitter must not drop an update.
+            // A repeated timestamp is held; a rewind starts a new backend epoch.
+            const double interval = std::chrono::duration<double>(InferenceInterval()).count();
+            if (!active_ || failed_ || !coherent ||
+                (base_[0] >= requested_stamp_ && base_[0] - requested_stamp_ < interval - 1e-6)) return;
+            if(base_[0] < requested_stamp_) {
+                epoch_ = pipeline_->Activate(command);
+                ResetPolicy();
+            }
+            snapshot = observation_;
+            base = base_;
+            requested_ = now;
+            requested_stamp_ = base[0];
         }
-        MatXf output = MatXf::Zero(12, 5);
-        { std::lock_guard<std::mutex> lock(mutex_);
-          if (have_torque_) {
-              output.col(4) = torque_;
-              // Use the same local joint PD gains as the Lite3 policy.
-              output.col(0).setConstant(30.0f);
-              output.col(2).setConstant(1.0f);
-              output.col(1) = position_;
-              output.col(3) = velocity_;
-          }
-          else {
-              output.col(1) = hold_position_;
-              for (int i=0; i<12; ++i) {
-                  output(i,0) = cp_ptr_->swing_leg_kp_(i%3);
-                  output(i,2) = cp_ptr_->swing_leg_kd_(i%3);
-              }
-          }
+        try {
+            // No wait for either process. WBC uses its latest completed MPC plan;
+            // residual ONNX inference overlaps with both independent processes.
+            const auto latest = pipeline_->Latest(epoch_,base[0]);
+            if (!latest) return;
+            MatXf combined = ComputeCommand(*latest, snapshot, command, base[0]);
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (!active_) return;
+            if (Clock::now() - requested_ >= std::chrono::milliseconds(150))
+                throw std::runtime_error("MPC control cycle timed out");
+            output_ = std::move(combined);
+            if (output_.rows() != 12 || output_.cols() != 5 || !output_.allFinite())
+                throw std::runtime_error("Invalid combined joint command");
+            completed_ = Clock::now();
+            ri_ptr_->SetJointCommand(output_);
+        } catch (const std::exception& error) {
+            std::lock_guard<std::mutex> lock(mutex_);
+            failed_ = true;
+            std::cerr << "[MPC] " << error.what() << '\n';
         }
-        ri_ptr_->SetJointCommand(output);
     }
+
     bool LoseControlJudge() override {
         if (uc_ptr_->GetUserCommand()->target_mode == uint8_t(RobotMotionState::JointDamping)) return true;
         std::lock_guard<std::mutex> lock(mutex_);
-        const bool stale = have_torque_ ? Clock::now()-received_ > std::chrono::milliseconds(150)
-                                       : Clock::now()-entered_ > std::chrono::seconds(2);
-        if (stale) std::cerr << "[MPC] MPC is not responding; switching to joint damping.\n";
-        return stale;
+        const auto now = Clock::now();
+        const bool stale = completed_ != Clock::time_point{} ? now - completed_ > std::chrono::milliseconds(150)
+                                               : now - entered_ > std::chrono::seconds(2);
+        if (failed_ || stale) std::cerr << "[MPC] Control cycle unavailable; joint damping.\n";
+        return failed_ || stale;
     }
 };
 }

@@ -58,7 +58,7 @@ list(GET MUJOCO_LIBRARIES 0 MUJOCO_LIBRARY)
 add_executable(mpc_srbd mpc/native/mpc_srbd_node.cpp)
 target_include_directories(mpc_srbd PRIVATE ${MUJOCO_ROOT}/include ${CMAKE_CURRENT_SOURCE_DIR}/third_party/eigen)
 target_link_libraries(mpc_srbd pybind11::embed ${MUJOCO_LIBRARY})
-ament_target_dependencies(mpc_srbd rclcpp ament_index_cpp std_msgs geometry_msgs)
+ament_target_dependencies(mpc_srbd rclcpp ament_index_cpp std_msgs geometry_msgs drdds)
 set_target_properties(mpc_srbd PROPERTIES INSTALL_RPATH "${MUJOCO_ROOT}")
 install(TARGETS mpc_srbd DESTINATION lib/${PROJECT_NAME})
 
@@ -91,6 +91,13 @@ set(CMAKE_INSTALL_RPATH
 )
 
 file(GLOB_RECURSE STATE_MACHINE_SRC "state_machine/*.c*")
+
+add_executable(wbc mpc/native/wbc_node.cpp)
+target_include_directories(wbc PRIVATE ${MUJOCO_ROOT}/include)
+target_link_libraries(wbc ${MUJOCO_LIBRARY})
+ament_target_dependencies(wbc rclcpp ament_index_cpp std_msgs drdds)
+set_target_properties(wbc PROPERTIES INSTALL_RPATH "${MUJOCO_ROOT}")
+install(TARGETS wbc DESTINATION lib/${PROJECT_NAME})
 
 add_executable(rl_deploy main.cpp ${STATE_MACHINE_SRC})
 
@@ -154,6 +161,14 @@ if(BUILD_TESTING AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/mpc/tests/native_benchm
   add_executable(native_mapper_probe mpc/tests/native_mapper_probe.cpp)
   target_include_directories(native_mapper_probe PRIVATE ${MUJOCO_ROOT}/include)
   target_link_libraries(native_mapper_probe ${MUJOCO_LIBRARY})
+endif()
+
+if(BUILD_TESTING)
+  enable_testing()
+  add_executable(control_concurrency_tests tests/control_concurrency.cpp)
+  target_compile_options(control_concurrency_tests PRIVATE -UNDEBUG)
+  target_link_libraries(control_concurrency_tests pthread)
+  add_test(NAME control_concurrency COMMAND control_concurrency_tests)
 endif()
 
 ament_package()

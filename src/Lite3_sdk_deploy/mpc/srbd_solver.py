@@ -72,8 +72,13 @@ def load_config(model_path):
 
 
 class Solver:
-    def __init__(self, model_path, input_buffer, output_buffer):
+    def __init__(self, model_path, input_buffer, output_buffer, mpc_frequency=None):
         self.config = load_config(model_path)
+        if mpc_frequency is not None:
+            if not np.isfinite(mpc_frequency) or mpc_frequency <= 0:
+                raise ValueError("Invalid MPC frequency")
+            self.config.mpc_frequency = float(mpc_frequency)
+            self.config.dt = 1.0 / self.config.mpc_frequency
         self.wrapper = BatchedMPCControllerWrapper(self.config, n_env=1)
         self.nominal = np.concatenate([self.config.p0, self.config.quat0, self.config.q0])
         self.mpc_frequency = float(self.config.mpc_frequency)

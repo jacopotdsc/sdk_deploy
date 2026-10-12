@@ -82,7 +82,8 @@ private:
     int stop_count = 1000;
 
 public:
-    Lite3PolicyRunner(const std::string &policy_name, const std::string &policy_path) :
+    Lite3PolicyRunner(const std::string &policy_name, const std::string &policy_path,
+                      float joint_kp = 30.f, float joint_kd = 1.f) :
             PolicyRunnerBase(policy_name), policy_path_(policy_path),env_(ORT_LOGGING_LEVEL_WARNING, "Lite3PolicyRunner"),
             session_options_{},
             session_{nullptr},
@@ -110,8 +111,8 @@ public:
 
         // 加载模型
         session_ = Ort::Session(env_, policy_path_.c_str(), session_options_);
-        kp_ = Vec3f(30, 30, 30).replicate(4, 1);
-        kd_ = Vec3f(1, 1, 1).replicate(4, 1);
+        kp_ = VecXf::Constant(motor_num, joint_kp);
+        kd_ = VecXf::Constant(motor_num, joint_kd);
         
         robot2policy_idx = generate_permutation(robot_order, policy_order);
         policy2robot_idx = generate_permutation(policy_order, robot_order);
