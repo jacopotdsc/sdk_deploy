@@ -7,29 +7,24 @@ import ast
 import os
 import sys
 from pathlib import Path
-from types import ModuleType, SimpleNamespace
+from types import SimpleNamespace, ModuleType
 os.environ.setdefault('XLA_PYTHON_CLIENT_PREALLOCATE', 'false')
 os.environ.setdefault('XLA_FLAGS', '--xla_gpu_enable_command_buffer=')
-
-MPX_ROOT = Path(__file__).resolve().parent / 'upstream'
-if not (MPX_ROOT / 'mpx/utils/mpc_wrapper_srbd.py').is_file():
-    raise RuntimeError('MPX checkout missing from mpc/upstream; install it and rebuild Lite3.')
-sys.path.insert(0, str(MPX_ROOT))
-mpx_package = ModuleType('mpx')
-mpx_package.__path__ = [str(MPX_ROOT / 'mpx')]
-mpx_package.__package__ = 'mpx'
-sys.modules['mpx'] = mpx_package
 
 import gc
 import numpy as np
 import jax
 import jax.numpy as jnp
 import mujoco
-from mpx.utils.mpc_wrapper_srbd import BatchedMPCControllerWrapper
 
 
-def load_config(model_path):
-    """Adapt the upstream Lite3 config to the SDK MuJoCo model."""
+def load_config(model_path, mpx_root):
+    """Adapt the selected upstream Lite3 config to the SDK MuJoCo model."""
+    MPX_ROOT = Path(mpx_root)
+    sys.path.insert(0, str(MPX_ROOT))
+    package = ModuleType("mpx")
+    package.__path__ = [str(MPX_ROOT / "mpx")]
+    sys.modules["mpx"] = package
     source = MPX_ROOT / 'mpx/config/config_lite3.py'
     tree = ast.parse(source.read_text(), filename=str(source))
     tree.body = [node for node in tree.body if not (
@@ -72,8 +67,11 @@ def load_config(model_path):
 
 
 class Solver:
-    def __init__(self, model_path, input_buffer, output_buffer):
-        self.config = load_config(model_path)
+    def __init__(self, model_path, input_buffer, output_buffer, mpx_root):
+        self.config = load_config(model_path, mpx_root)
+        from mpx.utils.mpc_wrapper_srbd import BatchedMPCControllerWrapper
+        self.config.mpc_frequency = float(self.config.mpc_frequency)
+        self.config.dt = 1.0 / self.config.mpc_frequency
         self.wrapper = BatchedMPCControllerWrapper(self.config, n_env=1)
         self.nominal = np.concatenate([self.config.p0, self.config.quat0, self.config.q0])
         self.mpc_frequency = float(self.config.mpc_frequency)

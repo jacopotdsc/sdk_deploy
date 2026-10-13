@@ -41,6 +41,7 @@ find_package(std_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(Python3 REQUIRED COMPONENTS Interpreter Development)
 find_package(pybind11 REQUIRED)
+find_package(pinocchio REQUIRED)
 # Use the same native MuJoCo library/header version as the Python environment.
 execute_process(COMMAND ${Python3_EXECUTABLE} -c
   "import pathlib,mujoco; print(pathlib.Path(mujoco.__file__).parent)"
@@ -57,8 +58,8 @@ endif()
 list(GET MUJOCO_LIBRARIES 0 MUJOCO_LIBRARY)
 add_executable(mpc_srbd mpc/native/mpc_srbd_node.cpp)
 target_include_directories(mpc_srbd PRIVATE ${MUJOCO_ROOT}/include ${CMAKE_CURRENT_SOURCE_DIR}/third_party/eigen)
-target_link_libraries(mpc_srbd pybind11::embed ${MUJOCO_LIBRARY})
-ament_target_dependencies(mpc_srbd rclcpp ament_index_cpp std_msgs geometry_msgs)
+target_link_libraries(mpc_srbd pybind11::embed ${MUJOCO_LIBRARY} pinocchio::pinocchio)
+ament_target_dependencies(mpc_srbd rclcpp ament_index_cpp std_msgs geometry_msgs drdds)
 set_target_properties(mpc_srbd PROPERTIES INSTALL_RPATH "${MUJOCO_ROOT}")
 install(TARGETS mpc_srbd DESTINATION lib/${PROJECT_NAME})
 
@@ -91,6 +92,22 @@ set(CMAKE_INSTALL_RPATH
 )
 
 file(GLOB_RECURSE STATE_MACHINE_SRC "state_machine/*.c*")
+
+add_executable(wbc mpc/native/wbc_node.cpp)
+target_include_directories(wbc PRIVATE ${MUJOCO_ROOT}/include)
+target_link_libraries(wbc pybind11::embed ${MUJOCO_LIBRARY} pinocchio::pinocchio)
+ament_target_dependencies(wbc rclcpp ament_index_cpp std_msgs drdds)
+set_target_properties(wbc PROPERTIES INSTALL_RPATH "${MUJOCO_ROOT}")
+install(TARGETS wbc DESTINATION lib/${PROJECT_NAME})
+
+# Offline MPC/WBC timing on the production runners; benchmark_mpc_wbc.py observes the nodes.
+add_executable(mpc_wbc_benchmark mpc/benchmark/mpc_wbc_benchmark.cpp)
+target_include_directories(mpc_wbc_benchmark PRIVATE ${MUJOCO_ROOT}/include mpc/native)
+target_link_libraries(mpc_wbc_benchmark pybind11::embed ${MUJOCO_LIBRARY} pinocchio::pinocchio)
+ament_target_dependencies(mpc_wbc_benchmark ament_index_cpp)
+set_target_properties(mpc_wbc_benchmark PROPERTIES INSTALL_RPATH "${MUJOCO_ROOT}")
+install(TARGETS mpc_wbc_benchmark DESTINATION lib/${PROJECT_NAME})
+install(PROGRAMS mpc/benchmark/benchmark_mpc_wbc.py DESTINATION lib/${PROJECT_NAME})
 
 add_executable(rl_deploy main.cpp ${STATE_MACHINE_SRC})
 
@@ -133,6 +150,8 @@ install(TARGETS rl_deploy
   DESTINATION lib/${PROJECT_NAME}
 )
 
+install(DIRECTORY launch/ DESTINATION share/${PROJECT_NAME}/launch)
+
 install(DIRECTORY config/
   DESTINATION share/${PROJECT_NAME}/config
 )
@@ -142,18 +161,9 @@ if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/mpc/upstream/mpx/jax_ocp_solvers/jax_
 endif()
 
 install(DIRECTORY mpc/ DESTINATION lib/${PROJECT_NAME}/mpc USE_SOURCE_PERMISSIONS
-  PATTERN "__pycache__" EXCLUDE PATTERN "tests" EXCLUDE
+  PATTERN "__pycache__" EXCLUDE PATTERN "tests" EXCLUDE PATTERN "benchmark" EXCLUDE
+  PATTERN "upstream" EXCLUDE
   PATTERN ".git" EXCLUDE)
 install(DIRECTORY Lite3_description DESTINATION lib/${PROJECT_NAME})
-
-if(BUILD_TESTING AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/mpc/tests/native_benchmark.cpp"
-    AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/mpc/tests/native_mapper_probe.cpp")
-  add_executable(native_benchmark mpc/tests/native_benchmark.cpp)
-  target_include_directories(native_benchmark PRIVATE ${MUJOCO_ROOT}/include)
-  target_link_libraries(native_benchmark pybind11::embed ${MUJOCO_LIBRARY})
-  add_executable(native_mapper_probe mpc/tests/native_mapper_probe.cpp)
-  target_include_directories(native_mapper_probe PRIVATE ${MUJOCO_ROOT}/include)
-  target_link_libraries(native_mapper_probe ${MUJOCO_LIBRARY})
-endif()
 
 ament_package()

@@ -22,7 +22,7 @@ public:
     ControlState(RobotName robot, std::shared_ptr<ControllerData> data)
         : StateBase(robot, "control", data), controllers_{
             {"rl_controller", std::make_shared<RLController>(robot, data)},
-            {"mpx", std::make_shared<MPXController>(robot, data)},
+            {"mpx_controller", std::make_shared<MPXController>(robot, data)},
         } {}
 
     const std::vector<ControllerEntry>& Controllers() const { return controllers_; }
@@ -33,8 +33,10 @@ public:
         auto& candidate = controllers_[next];
         if (!candidate.controller->IsReady()) {
             std::cout << "[CONTROLLER] " << candidate.name
-                      << " is not ready: compilation is in progress or the worker is unavailable. "
-                         "Request discarded; state unchanged. Press C / A after MPC READY."
+                      << " is not ready: required nodes are missing or not ready. "
+                         "Request discarded.\n [CONTROLLER] Current controller unchanged: "
+                      << (active_ ? controllers_[selected_].name : "none (outside control state)")
+                      << "."
                       << std::endl;
             return false;
         }
