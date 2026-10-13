@@ -79,6 +79,7 @@ class Solver:
         self.input = np.frombuffer(input_buffer, dtype=np.float64, count=32)
         self.output = np.frombuffer(output_buffer, dtype=np.float64, count=40)
         self.state = self.wrapper.init_state()
+        self.quat_prev = None
         self._run = jax.jit(self.run)
 
     def run(self, state, inputs, reset):
@@ -99,7 +100,14 @@ class Solver:
         return state, values
 
     def step(self, reset):
-        self.state, values = self._run(self.state, self.input, reset)
+        # Quaternion wrapper per continuity: MPC warm start requires
+        # to be neare the previous solution and a jump of sign 
+        # The error on first step of mpc X[0] - X_warm[0] can be large if the quaternion flips sign.
+        inputs = self.input.copy()  # C++ owns the read-only input buffer
+        if not reset and self.quat_prev is not None and np.dot(inputs[3:7], self.quat_prev) < 0:
+            inputs[3:7] *= -1
+        self.quat_prev = inputs[3:7].copy()
+        self.state, values = self._run(self.state, inputs, reset)
         # One synchronized device-to-host result; no tolist()/per-scalar conversion.
         np.copyto(self.output, np.asarray(values), casting='unsafe')
 
